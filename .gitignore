@@ -5,7 +5,9 @@
 .cursor/
 .cursorrules/
 .cursorrules/
+
 __pycache__/
 *.sqlite*
 .env
 *.db
+*.key
