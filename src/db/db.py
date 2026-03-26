@@ -1,6 +1,7 @@
+
 import sqlite3
 from datetime import datetime, timedelta
-
+from typing import Optional
 from src.logger import *
 
 class DB_WITH_TTL:
@@ -27,6 +28,7 @@ class DB_WITH_TTL:
                 f"""
                 CREATE TABLE IF NOT EXISTS {self._sql_ident(self.db_name)} (
                     envelope_id TEXT PRIMARY KEY,
+                    event_type TEXT,
                     created_at TIMESTAMP
                 )
                 """
@@ -39,7 +41,7 @@ class DB_WITH_TTL:
         try:
             cursor.execute(f"DELETE FROM {table} WHERE created_at < ?", (cutoff,))
         except sqlite3.OperationalError as e:
-            WarnLogger(f"TTL purge skipped for ({self.db_name!r}): {e}", flush=True)
+            WarnLogger(f"TTL purge skipped for ({self.db_name!r}): {e}")
 
     def execute_query(self, query, params=(), fetch=False):
         with self._get_connection() as conn:
@@ -55,3 +57,19 @@ class DB_WITH_TTL:
         if not rows:
             return False
         return bool(rows[0][0])
+
+    def get_envelope_event_type(self, envelope_id: str) -> Optional[str]:
+        q = f"SELECT event_type FROM {self._sql_ident(self.db_name)} WHERE envelope_id = ?"
+        rows = self.execute_query(q, (envelope_id,), fetch=True)
+        if not rows:
+            return None
+        return rows[0][0]
+
+    def upsert_envelope_event(self, envelope_id: str, event_type: str) -> None:
+        now = datetime.now().isoformat()
+        if self.envelope_record_exists(envelope_id):
+            q = f"UPDATE {self._sql_ident(self.db_name)} SET event_type = ?, created_at = ? WHERE envelope_id = ?"
+            self.execute_query(q, (event_type, now, envelope_id))
+        else:
+            q = f"INSERT INTO {self._sql_ident(self.db_name)} (envelope_id, event_type, created_at) VALUES (?, ?, ?)"
+            self.execute_query(q, (envelope_id, event_type, now))
