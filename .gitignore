@@ -1,0 +1,10 @@
+.DS_Store
+.claude/
+.vscode/
+.idea/
+.cursor/
+.cursorrules/
+.cursorrules/
+__pycache__/
+*.sqlite*
+.env
