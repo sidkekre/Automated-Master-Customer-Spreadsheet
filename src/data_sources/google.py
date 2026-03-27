@@ -9,16 +9,23 @@ from src.logger import *
 
 
 class Google:
-    def __init__(self, refresh_token: str, client_id: str, client_secret: str):
-        creds_drive = Credentials(
+    def __init__(self, refresh_token: str, client_id: str, client_secret: str, spreadsheet_id: str, tab_name: str):
+        self.spreadsheet_id = spreadsheet_id
+        self.tab_name = tab_name
+
+        creds = Credentials(
             None,
             refresh_token=refresh_token,
             token_uri='https://oauth2.googleapis.com/token',
             client_id=client_id,
             client_secret=client_secret,
-            scopes=['https://www.googleapis.com/auth/drive'],
+            scopes=[
+                'https://www.googleapis.com/auth/drive',
+                'https://www.googleapis.com/auth/spreadsheets',
+            ],
         )
-        self.service_google_drive = build('drive', 'v3', credentials=creds_drive)
+        self.service_google_drive = build('drive', 'v3', credentials=creds)
+        self.service_google_sheet = build('sheets', 'v4', credentials=creds)
 
     def _resolve_local_path(self, local_path):
         return str(Path(local_path).resolve())
@@ -81,3 +88,58 @@ class Google:
         except Exception as e:
             ErrorLogger(f'failed to upload PDF to Google Drive: {e}')
             return None
+
+    def validate_sheet_headers(self, tab_name: str, expected_columns: tuple[str, ...]) -> None:
+        '''Verify that all expected_columns exist in the sheet header row (case-insensitive).
+        Raises ValueError listing any missing columns.
+        '''
+        res = self.service_google_sheet.spreadsheets().values().get(
+            spreadsheetId=self.spreadsheet_id,
+            range=f'{tab_name}!1:1',
+        ).execute()
+        header_row: list[str] = res.get('values', [[]])[0] if res.get('values') else []
+        header_lower: set[str] = {h.lower() for h in header_row}
+        missing = [col for col in expected_columns if col.lower() not in header_lower]
+        if missing:
+            raise ValueError(f'Missing columns in sheet header: {missing}')
+        InfoLogger(f'Sheet header validation passed for tab [{tab_name}]: all {len(expected_columns)} columns present')
+
+    def append_row_to_sheet(self, tab_name: str, data: dict[str, str]) -> bool:
+        '''Appends a row to the sheet, aligned to the header row.
+        Keys in `data` are matched case-insensitively against the header.
+        None values are written as empty string without mutating the input dict.
+        '''
+        try:
+            res = self.service_google_sheet.spreadsheets().values().get(
+                spreadsheetId=self.spreadsheet_id,
+                range=f'{tab_name}!1:1',
+            ).execute()
+            header_row: list[str] = res.get('values', [[]])[0] if res.get('values') else []
+
+            data_normalised: dict[str, str] = {k.lower(): v for k, v in data.items()}
+            header_lower: set[str] = {h.lower() for h in header_row}
+
+            unmatched = [k for k in data if k.lower() not in header_lower]
+            if unmatched:
+                ErrorLogger(f'failed to append row to Google Sheet: column name not found in header: {unmatched}')
+                return False
+
+            # Build row aligned to header order; missing or None values become ''
+            row = [
+                (data_normalised[h.lower()] if data_normalised[h.lower()] is not None else '')
+                if h.lower() in data_normalised else ''
+                for h in header_row
+            ]
+
+            self.service_google_sheet.spreadsheets().values().append(
+                spreadsheetId=self.spreadsheet_id,
+                range=tab_name,
+                valueInputOption='RAW',
+                insertDataOption='INSERT_ROWS',
+                body={'values': [row]},
+            ).execute()
+            InfoLogger(f'Appended row to spreadsheet [{self.spreadsheet_id}] tab [{tab_name}]: {data}')
+            return True
+        except Exception as e:
+            ErrorLogger(f'failed to append row to Google Sheet: {e}')
+            return False

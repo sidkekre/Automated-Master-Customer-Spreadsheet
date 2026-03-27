@@ -97,11 +97,10 @@ def main(payload: dict) -> None:
             return
 
         InfoLogger(f'Envelope [{envelope_id}] PDF [{pdf_name}] uploaded to Google Drive')
-    
-    # TODO: Update Google Spreadsheet ('Status' column to 'Completed')
+        google.append_row_to_sheet(GOOGLE_SPREADSHEET_TAB_NAME, {'PDF Name': pdf_name, 'URL': pdf_gdrive_url})
 
 if __name__ == '__main__':
-    global FLASK_PORT, HMAC_SECRET, docusign_connect, google
+    global FLASK_PORT, HMAC_SECRET, docusign_connect, google, GOOGLE_SPREADSHEET_TAB_NAME
     _required = [
         'FLASK_PORT',
         'DOCUSIGN_HMAC_SECRET',
@@ -113,6 +112,8 @@ if __name__ == '__main__':
         'GOOGLE_REFRESH_TOKEN',
         'GOOGLE_CLIENT_ID',
         'GOOGLE_CLIENT_SECRET',
+        'GOOGLE_SPREADSHEET_ID',
+        'GOOGLE_SPREADSHEET_TAB_NAME',
     ]
     _missing = [k for k in _required if not os.getenv(k)]
     if _missing:
@@ -136,10 +137,13 @@ if __name__ == '__main__':
         raise SystemExit(1)
 
     try:
+        GOOGLE_SPREADSHEET_TAB_NAME = os.getenv('GOOGLE_SPREADSHEET_TAB_NAME')
         google = Google(
             refresh_token=os.getenv('GOOGLE_REFRESH_TOKEN'),
             client_id=os.getenv('GOOGLE_CLIENT_ID'),
             client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
+            spreadsheet_id=os.getenv('GOOGLE_SPREADSHEET_ID'),
+            tab_name=GOOGLE_SPREADSHEET_TAB_NAME,
         )
     except Exception as e:
         ErrorLogger(f'failed to initialize Google client: {e}')
