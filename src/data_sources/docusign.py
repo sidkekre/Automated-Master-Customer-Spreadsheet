@@ -3,6 +3,7 @@ from typing import Any, Optional
 import base64
 import hashlib
 import hmac as hmac_module
+from pathlib import Path
 from urllib.parse import quote, urlparse
 from datetime import datetime, timedelta, timezone
 
@@ -20,6 +21,7 @@ from src.constants import (
     STATUS_DUPLICATE,
     REASON_MISSING_EVENT,
     REASON_MISSING_ENVELOPE_ID,
+    LOCAL_ROOT_FOLDER,
 )
 
 class DocuSignConsentRequiredError(Exception):
@@ -208,7 +210,15 @@ class DocuSignConnectHandler:
             if self.envelope_db is not None and self.envelope_db.envelope_record_exists(envelope_id):
                 WarnLogger(f'Duplicate envelope completed ignored: {envelope_id}')
                 return {'status': STATUS_DUPLICATE, 'event': DOCUSIGN_EVENT_ENVELOPE_COMPLETED, 'envelope_id': envelope_id}
-            return self.handle_envelope_completed(envelope_id)
+            envelope_meta, pdf_name, local_pdf_path = self.handle_envelope_completed(envelope_id)
+            return {
+                'status': STATUS_PROCESSED,
+                'event': DOCUSIGN_EVENT_ENVELOPE_COMPLETED,
+                'envelope_id': envelope_id,
+                'envelope_meta': envelope_meta,
+                'pdf_name': pdf_name,
+                'local_pdf_path': local_pdf_path,
+            }
 
         WarnLogger(f"DocuSign webhook ignored (unhandled event): {event}")
         return {"status": STATUS_IGNORED, "event": event, "envelope_id": envelope_id}
@@ -218,13 +228,18 @@ class DocuSignConnectHandler:
             return
         self.envelope_db.upsert_envelope_event(envelope_id, event_type)
 
-    def handle_envelope_completed(self, envelope_id: str) -> dict[str, Any]:
-        # TODO: Add next steps for completed envelopes (e.g. download PDF, upload PDF to Google Drive, update Google Spread Sheet, etc.)
+    def handle_envelope_completed(self, envelope_id: str) -> tuple[dict[str, Any], str, str]:
         # TODO: Update Google Spreadsheet ('Status' column to 'Completed')
         InfoLogger(f'Received {DOCUSIGN_EVENT_ENVELOPE_COMPLETED} event for envelope {envelope_id}')
         self._record_event(envelope_id, DOCUSIGN_EVENT_ENVELOPE_COMPLETED)
-        return {
-            'status': STATUS_PROCESSED,
-            'event': DOCUSIGN_EVENT_ENVELOPE_COMPLETED,
-            'envelope_id': envelope_id,
-        }
+
+        pdf_bytes, envelope_meta = self.download_envelope(envelope_id)
+        local_dir = Path(LOCAL_ROOT_FOLDER)
+        local_dir.mkdir(parents=True, exist_ok=True)
+
+        pdf_name = (envelope_meta.get('name') or envelope_id).strip()
+        local_pdf_path = local_dir / f'{pdf_name}.pdf'
+        local_pdf_path.write_bytes(pdf_bytes)
+        InfoLogger(f'Saved envelope PDF to local path: {local_pdf_path}')
+
+        return envelope_meta, str(pdf_name), str(local_pdf_path)
