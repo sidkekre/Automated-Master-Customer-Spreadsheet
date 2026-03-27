@@ -68,7 +68,8 @@ class TestDocuSignConnectHandler(unittest.TestCase):
         if os.path.exists(self.test_db_file):
             os.remove(self.test_db_file)
 
-    def test_processes_completed_envelope_once(self) -> None:
+    @patch.object(DocuSignConnectHandler, 'download_envelope', return_value=(b'%PDF', {'name': 'test', 'envelope_id': TEST_ENVELOPE_ID, 'status': 'completed', 'envelope_type': None}))
+    def test_processes_completed_envelope_once(self, mock_download) -> None:
         payload = {
             'event': DOCUSIGN_EVENT_ENVELOPE_COMPLETED,
             'data': {'envelopeId': TEST_ENVELOPE_ID},
@@ -79,6 +80,8 @@ class TestDocuSignConnectHandler(unittest.TestCase):
         self.assertEqual(result.get('status'), STATUS_PROCESSED)
         self.assertEqual(result.get('event'), DOCUSIGN_EVENT_ENVELOPE_COMPLETED)
         self.assertEqual(result.get('envelope_id'), TEST_ENVELOPE_ID)
+        self.assertIn('local_pdf_path', result)
+        self.assertIn('envelope_meta', result)
 
     def test_rejects_duplicate_completed_envelope(self) -> None:
         self.db.execute_query(
