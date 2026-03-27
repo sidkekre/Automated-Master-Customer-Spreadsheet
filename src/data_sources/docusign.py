@@ -144,30 +144,36 @@ class DocuSignConnectHandler:
 
         return None
         
-    def download_envelope(self, envelope_id: str) -> tuple[bytes, dict[str, Any]]:
-        api_client = self._get_api_client()
-        envelopes_api = EnvelopesApi(api_client)
+    def download_envelope(self, envelope_id: str) -> tuple[bytes, dict[str, Any]] | None:
+        try:
+            api_client = self._get_api_client()
+            envelopes_api = EnvelopesApi(api_client)
 
-        envelope = envelopes_api.get_envelope(
-            self._account_id,
-            envelope_id,
-            include='custom_fields',
-        )
-        pdf_bytes = envelopes_api.get_document(
-            self._account_id,
-            'combined',
-            envelope_id,
-        )
+            envelope = envelopes_api.get_envelope(
+                self._account_id,
+                envelope_id,
+                include='custom_fields',
+            )
+            pdf_bytes = envelopes_api.get_document(
+                self._account_id,
+                'combined',
+                envelope_id,
+            )
 
-        envelope_meta = {
-            'envelope_id': envelope_id,
-            'name': envelope.email_subject or '',
-            'status': envelope.status or '',
-            'envelope_type': self._extract_envelope_type(envelope),
-        }
+            envelope_meta = {
+                'envelope_id': envelope_id,
+                'name': envelope.email_subject or '',
+                'status': envelope.status or '',
+                'envelope_type': self._extract_envelope_type(envelope),
+            }
 
-        InfoLogger(f'Downloaded envelope {envelope_id} ({len(pdf_bytes)} bytes)')
-        return pdf_bytes, envelope_meta
+            InfoLogger(f'Downloaded envelope {envelope_id} ({len(pdf_bytes)} bytes)')
+            return pdf_bytes, envelope_meta
+        except DocuSignConsentRequiredError:
+            raise
+        except Exception as e:
+            ErrorLogger(f'failed to download envelope {envelope_id}: {e}')
+            return None
 
     @staticmethod
     def get_event_type(payload: dict[str, Any]) -> Optional[str]:
@@ -210,7 +216,10 @@ class DocuSignConnectHandler:
             if self.envelope_db is not None and self.envelope_db.envelope_record_exists(envelope_id):
                 WarnLogger(f'Duplicate envelope completed ignored: {envelope_id}')
                 return {'status': STATUS_DUPLICATE, 'event': DOCUSIGN_EVENT_ENVELOPE_COMPLETED, 'envelope_id': envelope_id}
-            envelope_meta, pdf_name, local_pdf_path = self.handle_envelope_completed(envelope_id)
+            result = self.handle_envelope_completed(envelope_id)
+            if result is None:
+                return {'status': STATUS_ERROR, 'reason': REASON_MISSING_ENVELOPE_ID}
+            envelope_meta, pdf_name, local_pdf_path = result
             return {
                 'status': STATUS_PROCESSED,
                 'event': DOCUSIGN_EVENT_ENVELOPE_COMPLETED,
@@ -226,20 +235,32 @@ class DocuSignConnectHandler:
     def _record_event(self, envelope_id: str, event_type: str) -> None:
         if self.envelope_db is None:
             return
-        self.envelope_db.upsert_envelope_event(envelope_id, event_type)
+        try:
+            self.envelope_db.upsert_envelope_event(envelope_id, event_type)
+        except Exception as e:
+            WarnLogger(f'failed to record event for envelope {envelope_id}: {e}')
 
-    def handle_envelope_completed(self, envelope_id: str) -> tuple[dict[str, Any], str, str]:
-        # TODO: Update Google Spreadsheet ('Status' column to 'Completed')
-        InfoLogger(f'Received {DOCUSIGN_EVENT_ENVELOPE_COMPLETED} event for envelope {envelope_id}')
-        self._record_event(envelope_id, DOCUSIGN_EVENT_ENVELOPE_COMPLETED)
+    def handle_envelope_completed(self, envelope_id: str) -> tuple[dict[str, Any], str, str] | None:
+        try:
+            InfoLogger(f'Received {DOCUSIGN_EVENT_ENVELOPE_COMPLETED} event for envelope {envelope_id}')
+            self._record_event(envelope_id, DOCUSIGN_EVENT_ENVELOPE_COMPLETED)
 
-        pdf_bytes, envelope_meta = self.download_envelope(envelope_id)
-        local_dir = Path(LOCAL_ROOT_FOLDER)
-        local_dir.mkdir(parents=True, exist_ok=True)
+            result = self.download_envelope(envelope_id)
+            if result is None:
+                return None
+            pdf_bytes, envelope_meta = result
 
-        pdf_name = (envelope_meta.get('name') or envelope_id).strip()
-        local_pdf_path = local_dir / f'{pdf_name}.pdf'
-        local_pdf_path.write_bytes(pdf_bytes)
-        InfoLogger(f'Saved envelope PDF to local path: {local_pdf_path}')
+            local_dir = Path(LOCAL_ROOT_FOLDER)
+            local_dir.mkdir(parents=True, exist_ok=True)
 
-        return envelope_meta, str(pdf_name), str(local_pdf_path)
+            pdf_name = (envelope_meta.get('name') or envelope_id).strip()
+            local_pdf_path = local_dir / f'{pdf_name}.pdf'
+            local_pdf_path.write_bytes(pdf_bytes)
+            InfoLogger(f'Saved envelope PDF to local path: {local_pdf_path}')
+
+            return envelope_meta, str(pdf_name), str(local_pdf_path)
+        except DocuSignConsentRequiredError:
+            raise
+        except Exception as e:
+            ErrorLogger(f'failed to handle envelope completed {envelope_id}: {e}')
+            return None

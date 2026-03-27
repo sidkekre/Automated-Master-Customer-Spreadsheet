@@ -23,7 +23,8 @@ class DB_WITH_TTL:
         return sqlite3.connect(self.db_file)
 
     def _initialize_db(self):
-        with self._get_connection() as conn:
+        conn = self._get_connection()
+        try:
             conn.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS {self._sql_ident(self.db_name)} (
@@ -34,6 +35,8 @@ class DB_WITH_TTL:
                 """
             )
             conn.commit()
+        finally:
+            conn.close()
 
     def _purge_expired(self, cursor):
         cutoff = (datetime.now() - self.ttl).isoformat()
@@ -44,12 +47,18 @@ class DB_WITH_TTL:
             WarnLogger(f"TTL purge skipped for ({self.db_name!r}): {e}")
 
     def execute_query(self, query, params=(), fetch=False):
-        with self._get_connection() as conn:
+        conn = self._get_connection()
+        try:
             cursor = conn.cursor()
             self._purge_expired(cursor)
             cursor.execute(query, params)
             conn.commit()
             return cursor.fetchall() if fetch else None
+        except Exception as e:
+            ErrorLogger(f'DB query failed ({self.db_name}): {e}')
+            return None
+        finally:
+            conn.close()
 
     def envelope_record_exists(self, envelope_id: str) -> bool:
         q = f"SELECT EXISTS(SELECT 1 FROM {self._sql_ident(self.db_name)} WHERE envelope_id = ?)"
