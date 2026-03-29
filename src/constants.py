@@ -15,6 +15,9 @@ STATUS_DUPLICATE = 'duplicate'
 REASON_MISSING_EVENT = 'missing_event'
 REASON_MISSING_ENVELOPE_ID = 'missing_envelope_id'
 
+LOCAL_ROOT_FOLDER = r'./DOCS/'
+GOOGLE_DRIVE_ROOT_FOLDER = r'Automate_Master_Customer_Sheet_Test'
+
 # TEST ONLY                          
 
 TEST_DB_PATH = r'./tests/'
