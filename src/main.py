@@ -114,6 +114,7 @@ if __name__ == '__main__':
         'GOOGLE_CLIENT_SECRET',
         'GOOGLE_SPREADSHEET_ID',
         'GOOGLE_SPREADSHEET_TAB_NAME',
+        'TEMPLATES_GOOGLE_DRIVE_URL',
     ]
     _missing = [k for k in _required if not os.getenv(k)]
     if _missing:

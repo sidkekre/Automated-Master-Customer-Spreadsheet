@@ -16,6 +16,7 @@ REASON_MISSING_EVENT = 'missing_event'
 REASON_MISSING_ENVELOPE_ID = 'missing_envelope_id'
 
 LOCAL_ROOT_FOLDER = r'./DOCS/'
+LOCAL_TEMPLATES_FOLDER = LOCAL_ROOT_FOLDER + r'contract_templates/'
 GOOGLE_DRIVE_ROOT_FOLDER = r'Automate_Master_Customer_Sheet_Test'
 
 EXTRACTION_COLUMNS: tuple[str, ...] = (
