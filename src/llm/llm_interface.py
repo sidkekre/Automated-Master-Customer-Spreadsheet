@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 from pathlib import Path
 from typing import Any, List, Dict
 
-from src.constants import LOCAL_TEMPLATES_FOLDER
-from src.logger import InfoLogger, WarnLogger
+from src.constants import LOCAL_TEMPLATES_FOLDER, EXTRACTION_COLUMNS, EXTRACTION_DEFAULTS
+from src.logger import InfoLogger, WarnLogger, ErrorLogger
 
 from openai import OpenAI
 
@@ -65,6 +67,54 @@ class OpenAILLMInterface:
         self.main_system_prompt.write_text(result, encoding='utf-8')
         InfoLogger(f'Extraction prompt written to [{self.main_system_prompt}]')
         return result
+
+    def extract_contract_info(self, pdf_path: Path) -> dict[str, str] | None:
+        '''Upload a signed contract PDF, extract structured fields via LLM, return as dict.
+        Returns None on any failure (malformed response, missing keys, API error).
+        '''
+        extraction_prompt = self.main_system_prompt.read_text(encoding='utf-8').strip()
+        file_id: str | None = None
+        try:
+            file_id = self.upload_file(pdf_path)
+            user_content = [{'type': 'input_file', 'file_id': file_id}]
+            raw = self._complete(extraction_prompt, user_content)
+        except Exception as e:
+            ErrorLogger(f'extract_contract_info: LLM call failed for [{pdf_path.name}]: {e}')
+            return None
+        finally:
+            if file_id:
+                try:
+                    self.delete_file(file_id)
+                except Exception:
+                    pass
+
+        # Strip markdown fences if present
+        cleaned = re.sub(r'^```(?:json)?\s*', '', raw.strip())
+        cleaned = re.sub(r'\s*```$', '', cleaned)
+
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            ErrorLogger(f'extract_contract_info: invalid JSON for [{pdf_path.name}]: {e}')
+            return None
+
+        if not isinstance(parsed, dict):
+            ErrorLogger(f'extract_contract_info: expected JSON object, got {type(parsed).__name__}')
+            return None
+
+        expected = set(EXTRACTION_COLUMNS)
+        actual = set(parsed.keys())
+        missing = expected - actual
+        for key in list(missing):
+            if key in EXTRACTION_DEFAULTS:
+                parsed[key] = EXTRACTION_DEFAULTS[key]
+                missing.discard(key)
+        if missing:
+            ErrorLogger(f'extract_contract_info: missing keys in response: {missing}')
+            return None
+
+        # Convert null values to empty string for sheet compatibility
+        return {k: ('' if v is None else str(v)) for k, v in parsed.items() if k in expected}
 
     def upload_file(self, file_path: Path) -> str:
         '''Upload a file to the OpenAI Files API. Returns the file_id.'''

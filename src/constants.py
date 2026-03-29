@@ -19,6 +19,10 @@ LOCAL_ROOT_FOLDER = r'./DOCS/'
 LOCAL_TEMPLATES_FOLDER = LOCAL_ROOT_FOLDER + r'contract_templates/'
 GOOGLE_DRIVE_ROOT_FOLDER = r'Automate_Master_Customer_Sheet_Test'
 
+EXTRACTION_DEFAULTS: dict[str, str] = {
+    'Agreement Status (Signed / Pending / Expired)': 'Signed',
+}
+
 EXTRACTION_COLUMNS: tuple[str, ...] = (
     'Company Name',
     'DBA (if applicable)',

@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from docusign_esign.client.api_exception import ApiException
@@ -15,6 +16,7 @@ from src.constants import (
     TTL_DAYS,
     DOCUSIGN_SIGNATURE_HEADER,
     DOCUSIGN_EVENT_ENVELOPE_COMPLETED,
+    EXTRACTION_COLUMNS,
     GOOGLE_DRIVE_ROOT_FOLDER,
     STATUS_OK,
     STATUS_PROCESSED,
@@ -98,7 +100,14 @@ def main(payload: dict) -> None:
             return
 
         InfoLogger(f'Envelope [{envelope_id}] PDF [{pdf_name}] uploaded to Google Drive')
-        google.append_row_to_sheet(GOOGLE_SPREADSHEET_TAB_NAME, {'PDF Name': pdf_name, 'URL': pdf_gdrive_url})
+
+        extracted = llm.extract_contract_info(Path(local_pdf_path))
+        if extracted is None:
+            ErrorLogger(f'Envelope [{envelope_id}] PDF [{pdf_name}] extraction failed')
+            return
+
+        extracted['Document Link'] = pdf_gdrive_url
+        google.append_row_to_sheet(GOOGLE_SPREADSHEET_TAB_NAME, extracted)
 
 def parse_contract_templates(drive_url: str) -> None:
     if not google.download_templates(drive_url):
@@ -162,6 +171,15 @@ if __name__ == '__main__':
         )
     except Exception as e:
         ErrorLogger(f'failed to initialize Google client: {e}')
+        raise SystemExit(1)
+
+    try:
+        google.validate_sheet_headers(GOOGLE_SPREADSHEET_TAB_NAME, EXTRACTION_COLUMNS)
+    except ValueError as e:
+        ErrorLogger(f'Google Sheet header mismatch: {e}')
+        raise SystemExit(1)
+    except Exception as e:
+        ErrorLogger(f'failed to validate Google Sheet headers: {e}')
         raise SystemExit(1)
 
     try:

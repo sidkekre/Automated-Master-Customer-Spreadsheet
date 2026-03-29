@@ -2,7 +2,8 @@ import json
 import os
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 from src.constants import (
     TEST_DB_PATH,
@@ -14,12 +15,15 @@ from src.constants import (
     TEST_DOCUSIGN_UNKNOWN_EVENT,
     DOCUSIGN_EVENT_ENVELOPE_COMPLETED,
     DOCUSIGN_SIGNATURE_HEADER,
+    EXTRACTION_COLUMNS,
     STATUS_PROCESSED,
     STATUS_DUPLICATE,
     STATUS_IGNORED,
 )
 from src.data_sources.docusign import DocuSignConnectHandler
+from src.data_sources.google import Google
 from src.db.db import DB_WITH_TTL
+from src.llm.llm_interface import OpenAILLMInterface
 
 
 class TestDB(unittest.TestCase):
@@ -139,6 +143,78 @@ class TestWebhookRoute(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.get_json(), {'error': 'unauthorized'})
+
+
+def _build_extraction_json(overrides: dict | None = None) -> str:
+    '''Build a valid 32-key JSON string for extraction tests.'''
+    base = {col: f'val_{i}' for i, col in enumerate(EXTRACTION_COLUMNS)}
+    if overrides:
+        base.update(overrides)
+    return json.dumps(base)
+
+
+class TestExtractContractInfo(unittest.TestCase):
+    def setUp(self) -> None:
+        self.llm = OpenAILLMInterface(api_key='test-key', client=MagicMock())
+
+    @patch.object(OpenAILLMInterface, 'delete_file')
+    @patch.object(OpenAILLMInterface, '_complete')
+    @patch.object(OpenAILLMInterface, 'upload_file', return_value='file-123')
+    def test_returns_dict_with_all_keys_on_valid_json(self, mock_upload, mock_complete, mock_delete) -> None:
+        mock_complete.return_value = _build_extraction_json({'Company Name': None})
+        result = self.llm.extract_contract_info(Path('/tmp/test.pdf'))
+        self.assertIsInstance(result, dict)
+        self.assertEqual(len(result), len(EXTRACTION_COLUMNS))
+        self.assertEqual(result['Company Name'], '')
+        mock_delete.assert_called_once_with('file-123')
+
+    @patch.object(OpenAILLMInterface, 'delete_file')
+    @patch.object(OpenAILLMInterface, '_complete')
+    @patch.object(OpenAILLMInterface, 'upload_file', return_value='file-123')
+    def test_returns_none_on_bad_response(self, mock_upload, mock_complete, mock_delete) -> None:
+        mock_complete.return_value = 'not valid json'
+        result = self.llm.extract_contract_info(Path('/tmp/test.pdf'))
+        self.assertIsNone(result)
+
+    @patch.object(OpenAILLMInterface, 'delete_file')
+    @patch.object(OpenAILLMInterface, '_complete', side_effect=Exception('API error'))
+    @patch.object(OpenAILLMInterface, 'upload_file', return_value='file-123')
+    def test_cleans_up_file_on_error(self, mock_upload, mock_complete, mock_delete) -> None:
+        result = self.llm.extract_contract_info(Path('/tmp/test.pdf'))
+        self.assertIsNone(result)
+        mock_delete.assert_called_once_with('file-123')
+
+
+class TestValidateSheetHeaders(unittest.TestCase):
+    @patch('src.data_sources.google.build')
+    def setUp(self, mock_build) -> None:
+        self.mock_sheets = MagicMock()
+        mock_build.side_effect = [MagicMock(), self.mock_sheets]
+        self.google = Google(
+            refresh_token='test', client_id='test',
+            client_secret='test', spreadsheet_id='test-id', tab_name='Legal',
+        )
+        self.google.service_google_sheet = self.mock_sheets
+
+    def _mock_header_response(self, headers: list[str]) -> None:
+        self.mock_sheets.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+            'values': [headers]
+        }
+
+    def test_passes_when_all_columns_present(self) -> None:
+        self._mock_header_response(list(EXTRACTION_COLUMNS) + ['Document Link'])
+        self.google.validate_sheet_headers('Legal', EXTRACTION_COLUMNS)
+
+    def test_raises_when_columns_missing(self) -> None:
+        self._mock_header_response(['Company Name', 'Entity Type'])
+        with self.assertRaises(ValueError) as ctx:
+            self.google.validate_sheet_headers('Legal', EXTRACTION_COLUMNS)
+        self.assertIn('Missing columns', str(ctx.exception))
+
+    def test_case_insensitive_match(self) -> None:
+        headers = [col.upper() for col in EXTRACTION_COLUMNS]
+        self._mock_header_response(headers)
+        self.google.validate_sheet_headers('Legal', EXTRACTION_COLUMNS)
 
 
 if __name__ == '__main__':
