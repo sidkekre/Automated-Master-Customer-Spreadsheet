@@ -4,12 +4,13 @@ import os
 from pathlib import Path
 from typing import Any, List, Dict
 
-from src.logger import InfoLogger
+from src.constants import LOCAL_TEMPLATES_FOLDER
+from src.logger import InfoLogger, WarnLogger
 
 from openai import OpenAI
 
-DEFAULT_SYSTEM_PROMPT_PATH = Path(__file__).resolve().with_name('prompt_template_analysis.md')
-DEFAULT_OUTPUT_PATH = Path(__file__).resolve().with_name('prompt_contract_info_extract.md')
+PROMPT_TEMPLATE_ANALYSIS = Path(__file__).resolve().with_name('prompt_template_analysis.md')
+PROMPT_CONTRACT_INFO_EXTRACT = Path(__file__).resolve().with_name('prompt_contract_info_extract.md')
 
 
 class OpenAILLMInterface:
@@ -18,14 +19,52 @@ class OpenAILLMInterface:
         api_key: str,
         model: str | None = None,
         system_prompt_path: str | os.PathLike[str] | None = None,
-        output_path: str | os.PathLike[str] | None = None,
+        main_system_prompt: str | os.PathLike[str] | None = None,
         client: Any | None = None,
     ) -> None:
         self.model = model
-        self.system_prompt_path = Path(system_prompt_path or DEFAULT_SYSTEM_PROMPT_PATH).resolve()
-        self.output_path = Path(output_path or DEFAULT_OUTPUT_PATH).resolve()
+        self.system_prompt_path = Path(system_prompt_path or PROMPT_TEMPLATE_ANALYSIS).resolve()
+        self.main_system_prompt = Path(main_system_prompt or PROMPT_CONTRACT_INFO_EXTRACT).resolve()
         self.system_prompt = self._load_system_prompt()
         self.client = client or self._build_client(api_key)
+
+    def generate_extraction_prompt(self) -> str:
+        '''Reads contract template PDFs from LOCAL_TEMPLATES_FOLDER, uploads them to the
+        OpenAI Files API, sends them with prompt_template_analysis.md to the LLM, writes
+        the generated extraction prompt to prompt_contract_info_extract.md, and returns it.
+        All files are expected to be PDFs — download_templates() ensures this.
+        Uploaded files are cleaned up regardless of outcome.
+        '''
+        template_dir = Path(LOCAL_TEMPLATES_FOLDER)
+        if not template_dir.exists():
+            raise FileNotFoundError(f'Templates directory not found: [{template_dir}]')
+
+        file_ids: List[str] = []
+
+        try:
+            for path in sorted(template_dir.iterdir()):
+                if not path.is_file():
+                    continue
+                if path.suffix.lower() != '.pdf':
+                    WarnLogger(f'generate_extraction_prompt: skipping non-PDF file [{path.name}]')
+                    continue
+                file_ids.append(self.upload_file(path))
+
+            if not file_ids:
+                raise ValueError(f'No PDF template files found in [{LOCAL_TEMPLATES_FOLDER}]')
+
+            user_content = [{'type': 'input_file', 'file_id': fid} for fid in file_ids]
+            result = self._complete(self.system_prompt, user_content)
+        finally:
+            for fid in file_ids:
+                try:
+                    self.delete_file(fid)
+                except Exception:
+                    pass
+
+        self.main_system_prompt.write_text(result, encoding='utf-8')
+        InfoLogger(f'Extraction prompt written to [{self.main_system_prompt}]')
+        return result
 
     def upload_file(self, file_path: Path) -> str:
         '''Upload a file to the OpenAI Files API. Returns the file_id.'''

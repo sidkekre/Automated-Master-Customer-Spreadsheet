@@ -100,6 +100,17 @@ def main(payload: dict) -> None:
         InfoLogger(f'Envelope [{envelope_id}] PDF [{pdf_name}] uploaded to Google Drive')
         google.append_row_to_sheet(GOOGLE_SPREADSHEET_TAB_NAME, {'PDF Name': pdf_name, 'URL': pdf_gdrive_url})
 
+def parse_contract_templates(drive_url: str) -> None:
+    if not google.download_templates(drive_url):
+        ErrorLogger('failed to download contract templates from Google Drive')
+        raise SystemExit(1)
+    try:
+        llm.generate_extraction_prompt()
+        InfoLogger('Contract extraction system prompt generated')
+    except Exception as e:
+        ErrorLogger(f'failed to generate contract extraction system prompt: {e}')
+        raise SystemExit(1)
+
 if __name__ == '__main__':
     global FLASK_PORT, HMAC_SECRET, docusign_connect, google, GOOGLE_SPREADSHEET_TAB_NAME, llm
     _required = [
@@ -161,6 +172,8 @@ if __name__ == '__main__':
     except Exception as e:
         ErrorLogger(f'failed to initialize LLM interface: {e}')
         raise SystemExit(1)
+
+    # parse_contract_templates(os.getenv('TEMPLATES_GOOGLE_DRIVE_URL'))
 
     FLASK_PORT = os.getenv('FLASK_PORT')
     app.run(host='0.0.0.0', port=FLASK_PORT)
