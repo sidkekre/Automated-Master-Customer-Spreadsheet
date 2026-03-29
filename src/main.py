@@ -7,6 +7,7 @@ from src.db import db
 from src.logger import *
 from src.data_sources import docusign
 from src.data_sources.google import Google
+from src.llm.llm_interface import OpenAILLMInterface
 
 from src.constants import (
     DB_PATH,
@@ -100,7 +101,7 @@ def main(payload: dict) -> None:
         google.append_row_to_sheet(GOOGLE_SPREADSHEET_TAB_NAME, {'PDF Name': pdf_name, 'URL': pdf_gdrive_url})
 
 if __name__ == '__main__':
-    global FLASK_PORT, HMAC_SECRET, docusign_connect, google, GOOGLE_SPREADSHEET_TAB_NAME
+    global FLASK_PORT, HMAC_SECRET, docusign_connect, google, GOOGLE_SPREADSHEET_TAB_NAME, llm
     _required = [
         'FLASK_PORT',
         'DOCUSIGN_HMAC_SECRET',
@@ -115,6 +116,8 @@ if __name__ == '__main__':
         'GOOGLE_SPREADSHEET_ID',
         'GOOGLE_SPREADSHEET_TAB_NAME',
         'TEMPLATES_GOOGLE_DRIVE_URL',
+        'OPENAI_API_KEY',
+        'OPENAI_MODEL',
     ]
     _missing = [k for k in _required if not os.getenv(k)]
     if _missing:
@@ -148,6 +151,15 @@ if __name__ == '__main__':
         )
     except Exception as e:
         ErrorLogger(f'failed to initialize Google client: {e}')
+        raise SystemExit(1)
+
+    try:
+        llm = OpenAILLMInterface(
+            api_key=os.getenv('OPENAI_API_KEY'),
+            model=os.getenv('OPENAI_MODEL'),
+        )
+    except Exception as e:
+        ErrorLogger(f'failed to initialize LLM interface: {e}')
         raise SystemExit(1)
 
     FLASK_PORT = os.getenv('FLASK_PORT')
